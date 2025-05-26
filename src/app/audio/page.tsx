@@ -10,6 +10,7 @@ export default function AudioCompressPage() {
   const [error, setError] = useState<string | null>(null)
   const [isLameLoaded, setIsLameLoaded] = useState(false)
   const [isInitialized, setIsInitialized] = useState(false)
+  const [compressionStats, setCompressionStats] = useState<any>(null)
   const compressorRef = useRef<UniversalAudioCompressor | null>(null)
   const compressorInitPromise = useRef<Promise<UniversalAudioCompressor> | null>(null)
   const imageCompressorRef = useRef<UniversalImageCompressor | null>(null)
@@ -46,6 +47,8 @@ export default function AudioCompressPage() {
             sampleRate: 44100,
             channels: 2,
             format: 'mp3',
+            mode: 'normal',
+            bitDepth: 16
           })
           compressorRef.current = newCompressor
           setIsInitialized(true)
@@ -95,7 +98,7 @@ export default function AudioCompressPage() {
   }, [])
 
   // 压缩处理，确保compressor已初始化
-  const handleCompress = async (file: File) => {
+  const handleCompress = async (file: File, onProgress?: (progress: number) => void) => {
     let compressor = compressorRef.current
     if (!compressor) {
       try {
@@ -105,11 +108,46 @@ export default function AudioCompressPage() {
       }
     }
     try {
-      const result = await compressor.compressAudio(file)
+      const result = await compressor.compressAudio(file, {}, onProgress)
+      
+      // 更新压缩统计信息
+      const stats = compressor.getCompressionStats([result])
+      setCompressionStats(stats)
+      
       return result
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : 'Compression failed')
     }
+  }
+
+  // 批量压缩处理
+  const handleBatchCompress = async (files: File[]) => {
+    let compressor = compressorRef.current
+    if (!compressor) {
+      try {
+        compressor = await initializeCompressor()
+      } catch (err) {
+        throw new Error('Compressor not initialized')
+      }
+    }
+    try {
+      const results = await compressor.compressBatch(files, {}, (progress) => {
+        console.log('Compression progress:', progress)
+      })
+      
+      // 更新压缩统计信息
+      const stats = compressor.getCompressionStats(results)
+      setCompressionStats(stats)
+      
+      return results
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : 'Batch compression failed')
+    }
+  }
+
+  // 清除所有数据
+  const handleClear = () => {
+    setCompressionStats(null)
   }
 
   if (!isClient) {
@@ -130,6 +168,9 @@ export default function AudioCompressPage() {
           acceptedFileTypes="audio/*"
           maxFileSize={100 * 1024 * 1024} // 100MB
           onCompress={handleCompress}
+          onBatchCompress={handleBatchCompress}
+          onClear={handleClear}
+          compressionStats={compressionStats}
         />
       </div>
     </>

@@ -7,7 +7,7 @@ interface CompressorProps {
   description: string
   acceptedFileTypes: string
   maxFileSize?: number
-  onCompress: (file: File) => Promise<{
+  onCompress: (file: File, onProgress?: (progress: number) => void) => Promise<{
     name: string
     size: number
     originalSize: number
@@ -18,6 +18,34 @@ interface CompressorProps {
     compressionRatio?: string
     blob?: Blob
   }>
+  onBatchCompress?: (files: File[], onProgress?: (progress: number) => void) => Promise<{
+    name: string
+    size: number
+    originalSize: number
+    width?: number
+    height?: number
+    hasTransparency?: boolean
+    outputFormat?: string
+    compressionRatio?: string
+    blob?: Blob
+  }[]>
+  onClear?: () => void
+  compressionHistory?: Array<{
+    timestamp: string
+    originalFile: string
+    originalSize: number
+    compressedSize: number
+    settings: any
+  }>
+  compressionStats?: {
+    totalFiles: number
+    successCount: number
+    failedCount: number
+    totalOriginalSize: number
+    totalCompressedSize: number
+    totalSaved: number
+    averageCompressionRatio: string
+  }
 }
 
 export default function UniversalCompressor({
@@ -26,7 +54,11 @@ export default function UniversalCompressor({
   description,
   acceptedFileTypes,
   maxFileSize = 100 * 1024 * 1024, // 100MB default
-  onCompress
+  onCompress,
+  onBatchCompress,
+  onClear,
+  compressionHistory,
+  compressionStats
 }: CompressorProps) {
   const [file, setFile] = useState<File | null>(null)
   const [isCompressing, setIsCompressing] = useState(false)
@@ -62,7 +94,9 @@ export default function UniversalCompressor({
     setError(null)
 
     try {
-      const result = await onCompress(file)
+      const result = await onCompress(file, (progress) => {
+        setProgress(Math.round(progress * 100))
+      })
       setResult(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Compression failed')
@@ -70,6 +104,36 @@ export default function UniversalCompressor({
       setIsCompressing(false)
     }
   }, [file, onCompress])
+
+  const handleBatchCompress = useCallback(async (files: File[]) => {
+    if (!onBatchCompress) return
+
+    setIsCompressing(true)
+    setProgress(0)
+    setError(null)
+
+    try {
+      const results = await onBatchCompress(files, (progress) => {
+        setProgress(Math.round(progress * 100))
+      })
+      // 处理批量压缩结果
+      console.log('Batch compression results:', results)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Batch compression failed')
+    } finally {
+      setIsCompressing(false)
+    }
+  }, [onBatchCompress])
+
+  const handleClear = useCallback(() => {
+    if (onClear) {
+      onClear()
+    }
+    setFile(null)
+    setResult(null)
+    setError(null)
+    setProgress(0)
+  }, [onClear])
 
   const handleDownload = useCallback(() => {
     if (!result?.blob) return
@@ -117,6 +181,9 @@ export default function UniversalCompressor({
               className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
+            <div className="text-sm text-gray-600 mt-1 text-center">
+              {progress}%
+            </div>
           </div>
         )}
 
@@ -131,60 +198,73 @@ export default function UniversalCompressor({
 
         {result && (
           <div className="mt-4 space-y-4">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="font-semibold mb-2">Compression Results:</h3>
-              <div className="space-y-2 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="text-gray-600">File Name:</div>
-                  <div>{result.name}</div>
+            <div className="flex justify-end space-x-4">
+              <button
+                onClick={handleDownload}
+                className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+              >
+                Download Compressed File
+              </button>
+              {onClear && (
+                <button
+                  onClick={handleClear}
+                  className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {compressionStats && (
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2">Compression Statistics:</h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="text-gray-600">Total Files:</div>
+              <div>{compressionStats.totalFiles}</div>
+              
+              <div className="text-gray-600">Success Count:</div>
+              <div>{compressionStats.successCount}</div>
+              
+              <div className="text-gray-600">Failed Count:</div>
+              <div>{compressionStats.failedCount}</div>
+              
+              <div className="text-gray-600">Total Original Size:</div>
+              <div>{formatFileSize(compressionStats.totalOriginalSize)}</div>
+              
+              <div className="text-gray-600">Total Compressed Size:</div>
+              <div>{formatFileSize(compressionStats.totalCompressedSize)}</div>
+              
+              <div className="text-gray-600">Total Saved:</div>
+              <div>{formatFileSize(compressionStats.totalSaved)}</div>
+              
+              <div className="text-gray-600">Average Compression:</div>
+              <div>{compressionStats.averageCompressionRatio}%</div>
+            </div>
+          </div>
+        )}
+
+        {compressionHistory && compressionHistory.length > 0 && (
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+            <h3 className="font-semibold mb-2">Compression History:</h3>
+            <div className="space-y-2 text-sm">
+              {compressionHistory.map((item, index) => (
+                <div key={index} className="grid grid-cols-2 gap-2">
+                  <div className="text-gray-600">File:</div>
+                  <div>{item.originalFile}</div>
                   
                   <div className="text-gray-600">Original Size:</div>
-                  <div>{formatFileSize(result.originalSize)}</div>
+                  <div>{formatFileSize(item.originalSize)}</div>
                   
                   <div className="text-gray-600">Compressed Size:</div>
-                  <div>{formatFileSize(result.size)}</div>
+                  <div>{formatFileSize(item.compressedSize)}</div>
                   
-                  {result.width && result.height && (
-                    <>
-                      <div className="text-gray-600">Dimensions:</div>
-                      <div>{result.width} x {result.height}</div>
-                    </>
-                  )}
-                  
-                  {result.hasTransparency !== undefined && (
-                    <>
-                      <div className="text-gray-600">Transparency:</div>
-                      <div>{result.hasTransparency ? 'Yes' : 'No'}</div>
-                    </>
-                  )}
-                  
-                  {result.outputFormat && (
-                    <>
-                      <div className="text-gray-600">Output Format:</div>
-                      <div>{result.outputFormat}</div>
-                    </>
-                  )}
-                  
-                  {result.compressionRatio && (
-                    <>
-                      <div className="text-gray-600">Compression Ratio:</div>
-                      <div>{result.compressionRatio}</div>
-                    </>
-                  )}
+                  <div className="text-gray-600">Time:</div>
+                  <div>{new Date(item.timestamp).toLocaleString()}</div>
                 </div>
-              </div>
+              ))}
             </div>
-
-            {result.blob && (
-              <div className="flex justify-end space-x-4">
-                <button
-                  onClick={handleDownload}
-                  className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-                >
-                  Download Compressed File
-                </button>
-              </div>
-            )}
           </div>
         )}
       </div>
