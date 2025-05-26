@@ -21,9 +21,9 @@ export default function PPTCompressPage() {
     <div className="container mx-auto px-4 py-8">
       <UniversalCompressor
         type="ppt"
-        title="PPT Compression"
-        description="Compress your PowerPoint presentations while maintaining quality. Supports PPTX and PDF formats."
-        acceptedFileTypes=".pptx,.ppt,.pdf"
+        title="PPTX Compression"
+        description="Compress your PowerPoint presentations while maintaining quality. Supports PPTX format only."
+        acceptedFileTypes=".pptx"
         maxFileSize={100 * 1024 * 1024} // 100MB
         onCompress={handleCompress}
       />

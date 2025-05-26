@@ -13,6 +13,8 @@
 		"cf-typegen": "wrangler types --env-interface CloudflareEnv ./env.d.ts"
 	},
 	"dependencies": {
+		"@types/jszip": "^3.4.0",
+		"jszip": "^3.10.1",
 		"lamejs": "^1.2.1",
 		"next": "15.3.2",
 		"react": "^19.0.0",

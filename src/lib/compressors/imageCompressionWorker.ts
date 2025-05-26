@@ -114,8 +114,15 @@ self.onmessage = async function(e: MessageEvent<{ imageData: string; settings: C
         
         if (!resizedCtx) throw new Error('Failed to get resized canvas context');
         
-        // Set white background for non-transparent images
-        if (!hasTransparency) {
+        // Determine output format based on transparency
+        let outputFormat = settings.format;
+        // 如果目标是jpeg/jpg且有透明，自动切换为png
+        if ((outputFormat === 'jpeg' || outputFormat === 'jpg') && hasTransparency) {
+            outputFormat = 'png';
+        }
+        
+        // 只有在输出jpeg/jpg且无透明时才填充白底
+        if ((outputFormat === 'jpeg' || outputFormat === 'jpg') && !hasTransparency) {
             resizedCtx.fillStyle = '#FFFFFF';
             resizedCtx.fillRect(0, 0, width, height);
         }
@@ -128,12 +135,6 @@ self.onmessage = async function(e: MessageEvent<{ imageData: string; settings: C
             quality *= 0.8;
         } else if (settings.mode === 'maximum') {
             quality *= 0.6;
-        }
-        
-        // Determine output format based on transparency
-        let outputFormat = settings.format;
-        if (hasTransparency && (settings.format === 'jpeg' || settings.format === 'jpg')) {
-            outputFormat = 'png';
         }
         
         const blobOptions: BlobPropertyBag & { quality?: number } = { type: 'image/' + outputFormat };

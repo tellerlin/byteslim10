@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import UniversalCompressor from '@/components/compressors/UniversalCompressor'
 import { UniversalAudioCompressor } from '@/lib/compressors/UniversalAudioCompressor'
+import { UniversalImageCompressor } from '@/lib/compressors/UniversalImageCompressor'
 
 export default function AudioCompressPage() {
   const [isClient, setIsClient] = useState(false)
@@ -11,6 +12,7 @@ export default function AudioCompressPage() {
   const [isInitialized, setIsInitialized] = useState(false)
   const compressorRef = useRef<UniversalAudioCompressor | null>(null)
   const compressorInitPromise = useRef<Promise<UniversalAudioCompressor> | null>(null)
+  const imageCompressorRef = useRef<UniversalImageCompressor | null>(null)
 
   useEffect(() => {
     setIsClient(true)

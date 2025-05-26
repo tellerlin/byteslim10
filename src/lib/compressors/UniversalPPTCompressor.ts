@@ -1,10 +1,11 @@
+import JSZip, { JSZipObject } from 'jszip';
 import { UniversalImageCompressor } from './UniversalImageCompressor'
 
 interface PPTCompressorConfig {
   quality: number;
   maxWidth: number;
   maxHeight: number;
-  format: 'pptx' | 'pdf';
+  format: 'pptx';
   mode?: 'normal' | 'aggressive' | 'maximum';
   scale?: number;
 }
@@ -27,25 +28,23 @@ interface CompressionProgress {
 }
 
 const defaultConfig: PPTCompressorConfig = {
-  quality: 0.7,
+  quality: 0.9,
   maxWidth: 1600,
-  maxHeight: 1200,
+  maxHeight: 900,
   format: 'pptx',
-  mode: 'maximum',
-  scale: 0.9
+  mode: 'aggressive',
+  scale: 1
 };
 
 export class UniversalPPTCompressor {
   private options: PPTCompressorConfig;
   private imageCompressor: UniversalImageCompressor;
-  private worker: Worker | null = null;
 
   constructor(options: Partial<PPTCompressorConfig> = {}) {
     this.options = {
       ...defaultConfig,
       ...options
     };
-    
     this.imageCompressor = new UniversalImageCompressor({
       format: 'webp',
       quality: this.options.quality,
@@ -56,156 +55,83 @@ export class UniversalPPTCompressor {
     });
   }
 
-  private createCompressionWorker(): Worker | null {
-    if (typeof window === 'undefined') {
-      return null;
-    }
-    return new Worker(URL.createObjectURL(new Blob([`
-      self.onmessage = async function(e) {
-        const { pptData, settings } = e.data;
-        try {
-          const response = await fetch(pptData);
-          if (!response.ok) throw new Error('Failed to fetch PPT data');
-          
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
-          
-          // 使用 PDF.js 处理 PPT
-          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-          const numPages = pdf.numPages;
-          
-          // 处理每一页
-          const processedPages = [];
-          for (let i = 1; i <= numPages; i++) {
-            const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 1.0 });
-            
-            // 创建 canvas 进行渲染
-            const canvas = new OffscreenCanvas(viewport.width, viewport.height);
-            const context = canvas.getContext('2d');
-            
-            await page.render({
-              canvasContext: context,
-              viewport: viewport
-            }).promise;
-            
-            // 压缩图像
-            const compressedImage = await compressImage(canvas, settings);
-            processedPages.push(compressedImage);
-          }
-          
-          // 合并处理后的页面
-          const resultBlob = await combinePages(processedPages, settings);
-          
-          self.postMessage({
-            blob: resultBlob,
-            pageCount: numPages,
-            originalSize: settings.originalSize,
-            outputFormat: settings.format
-          });
-        } catch (error) {
-          self.postMessage({ error: error.message });
-        }
-      };
-
-      // 压缩图像
-      async function compressImage(canvas, settings) {
-        const blob = await canvas.convertToBlob({
-          type: 'image/webp',
-          quality: settings.quality
+  // 提取PPTX中的媒体图片文件
+  private async extractMediaFiles(pptxFile: File): Promise<{ path: string, file: File }[]> {
+    const zip = await JSZip.loadAsync(pptxFile);
+    const files: Record<string, JSZipObject> = zip.files;
+    const mediaFiles: { path: string, file: File }[] = [];
+    for (const [path, file] of Object.entries(files)) {
+      if (path.startsWith('ppt/media/') && !file.dir) {
+        const blob = await file.async('blob');
+        mediaFiles.push({
+          path,
+          file: new File([blob], path.split('/').pop() || 'media', { type: blob.type })
         });
-        return blob;
       }
+    }
+    return mediaFiles;
+  }
 
-      // 合并页面
-      async function combinePages(pages, settings) {
-        // 这里需要实现页面合并逻辑
-        // 可以使用 PDFKit 或其他库
-        // 暂时返回第一页作为示例
-        return pages[0];
+  // 用压缩后的图片替换PPTX中的原图片并重新打包
+  private async repackPPTX(originalPptx: File, compressedMedia: { path: string, compressedBlob: Blob }[]): Promise<Blob> {
+    const zip = await JSZip.loadAsync(originalPptx);
+    const files: Record<string, JSZipObject> = zip.files;
+    for (const media of compressedMedia) {
+      if (media.compressedBlob) {
+        zip.file(media.path, media.compressedBlob);
       }
-    `], { type: 'text/javascript' })));
+    }
+    return await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 9 } });
   }
 
   /**
-   * 压缩单个 PPT 文件
-   * @param {File|Blob} file - PPT 文件
+   * 压缩单个 PPTX 文件
+   * @param {File|Blob} file - PPTX 文件
    * @param {Object} settings - 压缩设置
    * @returns {Promise<Object>} 压缩结果
    */
   async compressPPT(file: File | Blob, settings: Partial<PPTCompressorConfig> = {}): Promise<CompressionResult> {
-    if (!this.worker) {
-      this.worker = this.createCompressionWorker();
+    if (!(file instanceof File)) {
+      throw new Error('Only File type is supported for PPTX compression');
     }
-
-    if (!this.worker) {
-      throw new Error('Worker not available');
+    // 1. 提取媒体文件
+    const mediaFiles = await this.extractMediaFiles(file);
+    if (mediaFiles.length === 0) {
+      return {
+        name: file.name,
+        size: file.size,
+        blob: file,
+        originalSize: file.size,
+        pageCount: 0,
+        outputFormat: '',
+        compressionRatio: '0',
+        error: 'No media files found in PPTX'
+      };
     }
-    
-    const compressionSettings = { 
-      ...this.options, 
-      ...settings, 
+    // 2. 压缩图片
+    const imageFiles = mediaFiles.map(m => m.file);
+    const compressedResults = await this.imageCompressor.compressBatch(imageFiles, { ...this.options, ...settings });
+    // 3. 重新打包
+    const compressedMedia = mediaFiles.map((media, i) => ({
+      path: media.path,
+      compressedBlob: compressedResults[i].blob
+    }));
+    const compressedPPTX = await this.repackPPTX(file, compressedMedia);
+    // 4. 返回结果
+    return {
+      name: file.name.replace('.pptx', '_compressed.pptx'),
+      size: compressedPPTX.size,
+      blob: compressedPPTX,
       originalSize: file.size,
-      originalName: file instanceof File ? file.name : ''
+      pageCount: 0,
+      outputFormat: '',
+      compressionRatio: ((file.size - compressedPPTX.size) / file.size * 100).toFixed(1) + '%'
     };
-    
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Compression timeout'));
-      }, 30000);
-
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          this.worker?.postMessage({
-            pptData: e.target?.result,
-            settings: compressionSettings
-          });
-
-          const handleMessage = (event: MessageEvent) => {
-            clearTimeout(timeout);
-            this.worker?.removeEventListener('message', handleMessage);
-
-            if (event.data.error) {
-              reject(new Error(event.data.error));
-            } else {
-              const { blob, pageCount, outputFormat } = event.data;
-              if (!blob) {
-                reject(new Error('No blob received from worker'));
-                return;
-              }
-
-              resolve({
-                name: file instanceof File ? file.name : 'compressed_ppt',
-                size: blob.size,
-                blob: blob,
-                originalSize: file.size,
-                pageCount: pageCount,
-                outputFormat: outputFormat,
-                compressionRatio: ((file.size - blob.size) / file.size * 100).toFixed(1)
-              });
-            }
-          };
-
-          this.worker?.addEventListener('message', handleMessage);
-        } catch (error) {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      };
-
-      reader.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error('Failed to read file'));
-      };
-
-      reader.readAsDataURL(file);
-    });
   }
 
   /**
-   * 批量压缩 PPT
-   * @param {Array} files - PPT 文件数组
+   * 批量压缩 PPTX
+   * @param {Array} files - PPTX 文件数组
    * @param {Object} settings - 压缩设置
    * @param {Function} progressCallback - 进度回调函数
    * @returns {Promise<Array>} 压缩结果数组
@@ -225,7 +151,7 @@ export class UniversalPPTCompressor {
         if (progressCallback) {
           progressCallback({
             progress: i / totalFiles,
-            fileName: file instanceof File ? file.name : `ppt_${i + 1}`,
+            fileName: file instanceof File ? file.name : `pptx_${i + 1}`,
             status: 'Processing...'
           });
         }
@@ -234,14 +160,14 @@ export class UniversalPPTCompressor {
         results.push(result);
 
       } catch (error) {
-        console.error(`Failed to compress ${file instanceof File ? file.name : `ppt_${i + 1}`}:`, error);
+        console.error(`Failed to compress ${file instanceof File ? file.name : `pptx_${i + 1}`}:`, error);
         results.push({
-          name: file instanceof File ? file.name : `ppt_${i + 1}`,
+          name: file instanceof File ? file.name : `pptx_${i + 1}`,
           size: 0,
           blob: new Blob(),
           originalSize: file.size,
           pageCount: 0,
-          outputFormat: 'pptx',
+          outputFormat: '',
           compressionRatio: '0',
           error: error instanceof Error ? error.message : 'Unknown error'
         });
@@ -302,10 +228,6 @@ export class UniversalPPTCompressor {
    * 销毁压缩器
    */
   destroy() {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
-    }
     this.imageCompressor.destroy();
   }
 } 
